@@ -17,18 +17,25 @@ SYSTEM_PROMPT = """
 Не отвечай короткой репликой с вопросом в конце. Прежде чем задать следующий вопрос, дай 2–4 содержательных предложения размышления: назови, что именно ты услышал в словах человека, и почему следующий вопрос идёт именно отсюда. Говори конкретно, его же словами, без общих формул поддержки («это очень важно», «я тебя понимаю»). Не задавай больше одного вопроса за раз.
 """
 
-# Устанавливаем стабильную модель с гарантированным бесплатным лимитом
+# Устанавливаем безотказную базовую модель
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash-latest", system_instruction=SYSTEM_PROMPT)
+model = genai.GenerativeModel("gemini-pro")
 
 # --- ПАМЯТЬ И СТАТИСТИКА ---
 user_chats = {}
 user_stats = {} # Здесь храним {"sessions": 0, "messages": 0, "paid": False}
 
+# Фокус: передаем правила нейросети как первое сообщение в истории!
+INITIAL_HISTORY = [
+    {"role": "user", "parts": [SYSTEM_PROMPT]},
+    {"role": "model", "parts": ["Я понял свои инструкции. Я готов задавать точные вопросы и вести философский диалог."]}
+]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    user_chats[user_id] = model.start_chat(history=[])
-    user_stats[user_id] = {"sessions": 0, "messages": 0, "paid": False} # Сбрасываем счетчик при /start
+    # Запускаем чат, сразу вкладывая в него историю с правилами
+    user_chats[user_id] = model.start_chat(history=INITIAL_HISTORY.copy())
+    user_stats[user_id] = {"sessions": 0, "messages": 0, "paid": False}
     
     welcome_text = (
         "Здравствуй. Этот инструмент не даст тебе готовых ответов и не определит, «кто ты на самом деле».\n\n"
@@ -41,35 +48,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     
-    # 1. Настройки для оплаты Звёздами Telegram (200 звёзд = ~$4)
     title = "Новая сессия самопознания"
     description = "Оплата следующей сессии (15 сообщений)."
     payload = "session_payment"
-    currency = "XTR" # Код валюты Telegram Stars
-    price = 200 # Цена в звездах
+    currency = "XTR" 
+    price = 200 
     prices = [LabeledPrice("Сессия", price)]
 
-    # 2. Кнопка для оплаты Картой/PayPal (пока ставим заглушку для ссылки)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Оплатить Картой / PayPal ($4)", url="https://lemon-squeezy.com/ваша-ссылка")]
     ])
 
-    # Отправляем счет (Telegram сам добавит кнопку "Оплатить XTR" сверху)
     await context.bot.send_invoice(
         chat_id, title, description, payload,
-        provider_token="", # Для звёзд токен оставляем пустым!
+        provider_token="", 
         currency=currency, prices=prices,
         reply_markup=keyboard
     )
 
-# --- ОБРАБОТКА УСПЕШНОЙ ОПЛАТЫ ЗВЕЗДАМИ ---
+# --- ОБРАБОТКА УСПЕШНОЙ ОПЛАТЫ ---
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Подтверждаем Telegram, что готовы принять платеж
     await update.pre_checkout_query.answer(ok=True)
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    # Фиксируем оплату и обнуляем счетчик сообщений
     if user_id in user_stats:
         user_stats[user_id]["paid"] = True
         user_stats[user_id]["messages"] = 0
@@ -83,7 +85,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_stats:
         user_stats[user_id] = {"sessions": 0, "messages": 0, "paid": False}
     if user_id not in user_chats:
-         user_chats[user_id] = model.start_chat(history=[])
+         user_chats[user_id] = model.start_chat(history=INITIAL_HISTORY.copy())
          
     stats = user_stats[user_id]
     
@@ -91,21 +93,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if stats["messages"] >= 15:
         stats["sessions"] += 1
         stats["messages"] = 0
-        stats["paid"] = False # Сбрасываем оплату для новой сессии
+        stats["paid"] = False 
         await update.message.reply_text("Твоя сессия из 15 сообщений подошла к концу.")
         
-    # ЕСЛИ 3-Я ИЛИ СЛЕДУЮЩАЯ СЕССИЯ И ОНА НЕ ОПЛАЧЕНА
     if stats["sessions"] >= 2 and not stats["paid"]:
         await send_payment_options(update, context)
-        return # Прерываем работу, пока не оплатит
+        return 
     
     # ЕСЛИ ВСЁ ОК — ОБЩАЕМСЯ С НЕЙРОСЕТЬЮ
     chat = user_chats[user_id]
     try:
-        stats["messages"] += 1 # Увеличиваем счетчик
+        stats["messages"] += 1 
         response = chat.send_message(user_text)
         messages_left = 15 - stats["messages"]
-        # Добавляем к ответу ИИ маленькую приписку с остатком сообщений
         await update.message.reply_text(f"{response.text}\n\n*(Осталось сообщений в сессии: {messages_left})*", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"Произошла ошибка при обращении к ИИ: {e}")
@@ -117,7 +117,6 @@ def main():
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Регистрируем обработчики команд и текста
     app.add_handler(CommandHandler("start", start))
     app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback))

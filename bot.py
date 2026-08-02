@@ -1,85 +1,59 @@
-
+import telebot
+import requests
+import json
 import os
-import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from openai import OpenAI
 
-# ===== НАСТРОЙКИ =====
-logging.basicConfig(level=logging.INFO)
+# --- НАСТРОЙКИ ---
+# Токен Telegram бот берет из настроек Render (Environment Variables)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# === ПРОВЕРКА КЛЮЧЕЙ ===
+# Ключ DeepSeek берет из настроек Render (Environment Variables)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-if not DEEPSEEK_API_KEY:
-    raise ValueError("❌ Не найден DEEPSEEK_API_KEY. Добавь его в Render!")
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise ValueError("❌ Не найден TELEGRAM_BOT_TOKEN. Добавь его в Render!")
+# Создаем объект бота
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# === СОЗДАЁМ КЛИЕНТА ДЛЯ DEEPSEEK ===
-client = OpenAI(
-    api_key=DEEPSEEK_API_KEY=api_key = " sk-dd6e4d8284404ae29ed994c823cb07dd"         
-    base_url="https://api.deepseek.com"
-)
+# Адрес API DeepSeek
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
-# === ЛИЧНОСТЬ БОТА (СИСТЕМНЫЙ ПРОМПТ) ===
-SYSTEM_PROMPT = (
-    "Ты — поддерживающий и мудрый проводник в мир самопознания. "
-    "Помогай пользователю изучать себя. Отвечай тепло, но не навязчиво. "
-    "Задавай наводящие вопросы, если чувствуешь, что человек хочет глубже разобраться."
-)
+# --- ФУНКЦИЯ ОБРАЩЕНИЯ К DEEPSEEK ---
+def get_deepseek_response(user_message):
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+    }
+    
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "Ты полезный и вежливый ассистент."},
+            {"role": "user", "content": user_message}
+        ],
+        "stream": False
+    }
 
-# === ФУНКЦИЯ ЗАПРОСА К DEEPSEEK ===
-async def get_deepseek_response(user_message: str) -> str:
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
-            ],
-            temperature=0.7,
-            max_tokens=1000
-        )
-        return response.choices[0].message.content
+        response = requests.post(DEEPSEEK_URL, headers=headers, json=data)
+        response.raise_for_status()
+        result = response.json()
+        return result['choices'][0]['message']['content']
     except Exception as e:
-        logging.error(f"Ошибка DeepSeek: {e}")
-        return "⚠️ Произошла ошибка. Попробуй позже."
+        print(f"Ошибка при запросе к DeepSeek: {e}")
+        return "Извините, произошла ошибка при обращении к нейросети."
 
-# === КОМАНДА /start ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🌟 Привет! Я — твой проводник в самопознание.\n"
-        "Задавай мне любые вопросы о себе, мыслях, чувствах — будем разбираться вместе."
-    )
+# --- ОБРАБОТЧИК КОМАНДЫ /start ---
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message, "Привет! Я бот, подключенный к DeepSeek. Напиши мне что-нибудь.")
 
-# === ОБРАБОТКА СООБЩЕНИЙ ===
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    await update.message.reply_text("🧠 Думаю... пишу...")
+# --- ОБРАБОТЧИК ЛЮБОГО ТЕКСТОВОГО СООБЩЕНИЯ ---
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    ai_response = get_deepseek_response(message.text)
+    bot.reply_to(message, ai_response)
 
-    bot_reply = await get_deepseek_response(user_text)
-
-    if len(bot_reply) > 4096:
-        for chunk in bot_reply.split("\n\n"):
-            await update.message.reply_text(chunk)
-    else:
-        await update.message.reply_text(bot_reply)
-
-# === ЗАПУСК ===
-def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    port = int(os.environ.get("PORT", 10000))
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/"
-    )
-
+# --- ЗАПУСК БОТА ---
 if __name__ == "__main__":
-    main()
+    print("Бот запущен и слушает сообщения...")
+    bot.infinity_polling()

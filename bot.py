@@ -1,58 +1,85 @@
+
 import os
-import asyncio
-from aiohttp import web
+import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+from openai import OpenAI
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+# ===== НАСТРОЙКИ =====
+logging.basicConfig(level=logging.INFO)
 
-genai.configure(api_key=GEMINI_KEY)
-SYSTEM_PROMPT = "Ты — поддерживающий и мудрый проводник в мир самопознания. Помогай пользователю изучать себя."
+# === ПРОВЕРКА КЛЮЧЕЙ ===
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+if not DEEPSEEK_API_KEY:
+    raise ValueError("❌ Не найден DEEPSEEK_API_KEY. Добавь его в Render!")
 
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise ValueError("❌ Не найден TELEGRAM_BOT_TOKEN. Добавь его в Render!")
+
+# === СОЗДАЁМ КЛИЕНТА ДЛЯ DEEPSEEK ===
+client = OpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
+)
+
+# === ЛИЧНОСТЬ БОТА (СИСТЕМНЫЙ ПРОМПТ) ===
+SYSTEM_PROMPT = (
+    "Ты — поддерживающий и мудрый проводник в мир самопознания. "
+    "Помогай пользователю изучать себя. Отвечай тепло, но не навязчиво. "
+    "Задавай наводящие вопросы, если чувствуешь, что человек хочет глубже разобраться."
+)
+
+# === ФУНКЦИЯ ЗАПРОСА К DEEPSEEK ===
+async def get_deepseek_response(user_message: str) -> str:
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7,
+            max_tokens=1000
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logging.error(f"Ошибка DeepSeek: {e}")
+        return "⚠️ Произошла ошибка. Попробуй позже."
+
+# === КОМАНДА /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я твой проводник в мир самопознания. О чем бы ты хотел поговорить?")
+    await update.message.reply_text(
+        "🌟 Привет! Я — твой проводник в самопознание.\n"
+        "Задавай мне любые вопросы о себе, мыслях, чувствах — будем разбираться вместе."
+    )
 
+# === ОБРАБОТКА СООБЩЕНИЙ ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    try:
-        model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash',
-            system_instruction=SYSTEM_PROMPT
-        )
-        response = model.generate_content(user_text)
-        if response.text:
-            await update.message.reply_text(response.text)
-        else:
-            await update.message.reply_text("Извини, ответ пустой. Попробуй написать иначе.")
-    except Exception as e:
-        print(f"ОШИБКА GEMINI: {e}")
-        await update.message.reply_text("Извини, произошла заминка при обдумывании ответа.")
+    await update.message.reply_text("🧠 Думаю... пишу...")
 
-async def handle_render_ping(request):
-    return web.Response(text="Бот онлайн")
+    bot_reply = await get_deepseek_response(user_text)
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle_render_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+    if len(bot_reply) > 4096:
+        for chunk in bot_reply.split("\n\n"):
+            await update.message.reply_text(chunk)
+    else:
+        await update.message.reply_text(bot_reply)
 
-async def main():
-    await start_web_server()
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    async with application:
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
-        while True:
-            await asyncio.sleep(3600)
+# === ЗАПУСК ===
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    port = int(os.environ.get("PORT", 10000))
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/"
+    )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -19,7 +19,7 @@ if not TELEGRAM_TOKEN:
 
 # === СОЗДАЁМ КЛИЕНТА ДЛЯ DEEPSEEK ===
 client = OpenAI(
-    api_key=DEEPSEEK_API_KEY,
+    api_key=DEEPSEEK_API_KEY=api_key = " sk-dd6e4d8284404ae29ed994c823cb07dd"         
     base_url="https://api.deepseek.com"
 )
 

@@ -1,59 +1,37 @@
 import telebot
 import requests
-import json
 import os
 
-# --- НАСТРОЙКИ ---
-# Токен Telegram бот берет из настроек Render (Environment Variables)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-# Ключ DeepSeek берет из настроек Render (Environment Variables)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-# Создаем объект бота
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Адрес API DeepSeek
-DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-
-# --- ФУНКЦИЯ ОБРАЩЕНИЯ К DEEPSEEK ---
 def get_deepseek_response(user_message):
+    url = "https://api.deepseek.com/chat/completions"
     headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
     }
-    
     data = {
         "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "Ты полезный и вежливый ассистент."},
-            {"role": "user", "content": user_message}
-        ],
-        "stream": False
+        "messages": [{"role": "user", "content": user_message}]
     }
-
     try:
-        response = requests.post(DEEPSEEK_URL, headers=headers, json=data)
-        response.raise_for_status()
-        result = response.json()
-        return result['choices'][0]['message']['content']
-    except Exception as e:
-        print(f"Ошибка при запросе к DeepSeek: {e}")
-        return "Извините, произошла ошибка при обращении к нейросети."
+        response = requests.post(url, headers=headers, json=data)
+        return response.json()["choices"][0]["message"]["content"]
+    except:
+        return "Извините, сейчас нейросеть перегружена. Попробуйте написать через 10 секунд."
 
-# --- ОБРАБОТЧИК КОМАНДЫ /start ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "Привет! Я бот, подключенный к DeepSeek. Напиши мне что-нибудь.")
+    bot.reply_to(message, "Привет! Я твой друг, подключенный к DeepSeek. Спрашивай что хочешь!")
 
-# --- ОБРАБОТЧИК ЛЮБОГО ТЕКСТОВОГО СООБЩЕНИЯ ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    ai_response = get_deepseek_response(message.text)
-    bot.reply_to(message, ai_response)
+    answer = get_deepseek_response(message.text)
+    bot.reply_to(message, answer)
 
-# --- ЗАПУСК БОТА ---
 if __name__ == "__main__":
-    print("Бот запущен и слушает сообщения...")
     bot.infinity_polling()
